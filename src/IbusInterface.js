@@ -1,7 +1,10 @@
 var SerialPort = require("serialport");
-var Log = require('log'),
+var fs = require('fs'),
+    Log = require('log'),
     log = new Log('info'),
+    log2 = new Log('debug', fs.createWriteStream('my.log'));
     clc = require('cli-color');
+
 
 var util = require('util');
 var EventEmitter = require('events').EventEmitter;
@@ -38,6 +41,7 @@ var IbusInterface = function(devicePath) {
             parity: 'even',
             stopbits: 1,
             databits: 8,
+            rtscts: true,
             parser: SerialPort.parsers.raw
         });
 
@@ -63,35 +67,29 @@ var IbusInterface = function(devicePath) {
 
                 serialPort.pipe(parser);
 
-                watchForEmptyBus(processWriteQueue);
+                //watchForEmptyBus(processWriteQueue);
             }
         });
+
     }
 
-    function getHrDiffTime(time) {
-        // ts = [seconds, nanoseconds]
-        var ts = process.hrtime(time);
-        // convert seconds to miliseconds and nanoseconds to miliseconds as well
-        return (ts[0] * 1000) + (ts[1] / 1000000);
-    };
 
+    function isItSafeToSend(){
 
-    function watchForEmptyBus(workerFn) {        
-        if (getHrDiffTime(lastActivityTime) >= 20) {
-            workerFn(function success() {
-                // operation is ready, resume looking for an empty bus
-                setImmediate(watchForEmptyBus, workerFn);
-            });
-        } else {
-            // keep looking for an empty Bus
-            setImmediate(watchForEmptyBus, workerFn);
-        }
+        serialPort.get((err, status) => {
+            if (err) {
+                log.error('[IbusInterface] serial.get error:' + err);
+                return;
+            }
+            return status.cts;
+        });      
     }
 
-    function processWriteQueue(ready) {
+    function processWriteQueue() {
         // noop on empty queue
-        if (queue.length <= 0) {
-            ready();
+        if (queue.length <= 0 && !isItSafeToSend() ) {
+            // try again
+            processWriteQueue();
             return;
         }
 
@@ -109,10 +107,7 @@ var IbusInterface = function(devicePath) {
                 serialPort.drain(function(error) {
                     log.debug(clc.white('Data drained'));
 
-                    // this counts as an activity, so mark it
-                    lastActivityTime = process.hrtime();
-
-                    ready();
+                    //ready();
                 });
             }
 
@@ -162,6 +157,8 @@ var IbusInterface = function(devicePath) {
         }
 
         queue.unshift(dataBuf);
+
+        processWriteQueue();
     }
 
 };
